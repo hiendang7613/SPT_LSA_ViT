@@ -48,48 +48,62 @@ class FeedForward(nn.Module):
 
 
 class Attention(nn.Module):
-    def __init__(self, dim, num_patches, heads = 8, dim_head = 64, dropout = 0., is_LSA=False):
+    def __init__(self, dim, num_patches, num_extra_kv_tokens=10, heads=8, dim_head=64, dropout=0., is_LSA=False):
         super().__init__()
-        inner_dim = dim_head *  heads
+        inner_dim = dim_head * heads
         project_out = not (heads == 1 and dim_head == dim)
+        self.dim = dim
         self.num_patches = num_patches
+        self.num_extra_kv_tokens = num_extra_kv_tokens
         self.heads = heads
         self.scale = dim_head ** -0.5
-        self.dim = dim
         self.inner_dim = inner_dim
-        self.attend = nn.Softmax(dim = -1)
-        self.to_qkv = nn.Linear(self.dim, self.inner_dim * 3, bias = False)
+        self.dim_head = dim_head
+        self.attend = nn.Softmax(dim=-1)
+        self.to_qkv = nn.Linear(self.dim, self.inner_dim * 3, bias=False)
+        self.extra_k_tokens = nn.Parameter(torch.randn(num_extra_kv_tokens, self.dim_head))
+        self.extra_v_tokens = nn.Parameter(torch.randn(num_extra_kv_tokens, self.dim_head))
         init_weights(self.to_qkv)
+        init_weights(self.extra_k_tokens)
+        init_weights(self.extra_v_tokens)
         self.to_out = nn.Sequential(
             nn.Linear(self.inner_dim, self.dim),
             nn.Dropout(dropout)
         ) if project_out else nn.Identity()
-            
+
         if is_LSA:
-            self.scale = nn.Parameter(self.scale*torch.ones(heads))    
-            self.mask = torch.eye(self.num_patches+1, self.num_patches+1)
+            self.scale = nn.Parameter(self.scale * torch.ones(heads))
+            self.mask = torch.eye(self.num_patches + self.num_extra_kv_tokens, self.num_patches + self.num_extra_kv_tokens)
             self.mask = torch.nonzero((self.mask == 1), as_tuple=False)
         else:
             self.mask = None
 
-    def forward(self, x):
+    def forward(self, x, extra_kv_tokens=None):
         b, n, _, h = *x.shape, self.heads
-        qkv = self.to_qkv(x).chunk(3, dim = -1)
-        q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h = h), qkv)
+        qkv = self.to_qkv(x).chunk(3, dim=-1)
+        q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h=h), qkv)
+
+        # Concatenate extra key-value tokens if available
+        if extra_kv_tokens is not None:
+            extra_k_tokens = torch.broadcast_to(self.extra_k_tokens, (b, h, self.num_extra_kv_tokens, self.dim_head))
+            extra_v_tokens = torch.broadcast_to(self.extra_v_tokens, (b, h, self.num_extra_kv_tokens, self.dim_head))
+            k = torch.cat([k, extra_k_tokens], dim=2)
+            v = torch.cat([v, extra_v_tokens], dim=2)
 
         if self.mask is None:
             dots = einsum('b h i d, b h j d -> b h i j', q, k) * self.scale
-        
         else:
             scale = self.scale
-            dots = torch.mul(einsum('b h i d, b h j d -> b h i j', q, k), scale.unsqueeze(0).unsqueeze(-1).unsqueeze(-1).expand((b, h, 1, 1)))
+            dots = torch.mul(einsum('b h i d, b h j d -> b h i j', q, k),
+                             scale.unsqueeze(0).unsqueeze(-1).unsqueeze(-1).expand((b, h, 1, 1)))
             dots[:, :, self.mask[:, 0], self.mask[:, 1]] = -987654321
 
         attn = self.attend(dots)
-        out = einsum('b h i j, b h j d -> b h i d', attn, v) 
-            
+        out = einsum('b h i j, b h j d -> b h i d', attn, v)
+
         out = rearrange(out, 'b h n d -> b n (h d)')
         return self.to_out(out)
+
     
     def flops(self):
         flops = 0
