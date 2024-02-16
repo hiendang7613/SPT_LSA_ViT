@@ -61,7 +61,6 @@ class Attention(nn.Module):
         project_out = not (heads == 1 and dim_head == dim)
         self.dim = dim
         self.num_patches = num_patches
-        self.num_extra_kv_tokens = num_extra_kv_tokens
         self.heads = heads
         self.scale = dim_head ** -0.5
         self.inner_dim = inner_dim
@@ -79,7 +78,7 @@ class Attention(nn.Module):
 
         if is_LSA:
             self.scale = nn.Parameter(self.scale * torch.ones(heads))
-            self.mask = torch.eye(self.num_patches + self.num_extra_kv_tokens, self.num_patches + self.num_extra_kv_tokens)
+            self.mask = torch.eye(self.num_patches+1, self.num_patches+1)
             self.mask = torch.nonzero((self.mask == 1), as_tuple=False)
         else:
             self.mask = None
