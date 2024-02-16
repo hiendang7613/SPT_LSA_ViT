@@ -125,7 +125,7 @@ class Transformer(nn.Module):
         self.layers = nn.ModuleList([])
         self.scale = {}
 
-        num_extra_kv_tokens = 10
+        num_extra_kv_tokens = 16
         extra_k_tokens, extra_v_tokens = init_extra_tokens(num_extra_kv_tokens, dim_head)
 
         for i in range(depth):
