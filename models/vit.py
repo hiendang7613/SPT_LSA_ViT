@@ -47,8 +47,15 @@ class FeedForward(nn.Module):
         return self.net(x)
 
 
+def init_extra_tokens( num_extra_kv_tokens, dim_head):
+    extra_k_tokens = nn.Parameter(torch.randn(num_extra_kv_tokens, dim_head))
+    extra_v_tokens = nn.Parameter(torch.randn(num_extra_kv_tokens, dim_head))
+    init_weights(extra_k_tokens)
+    init_weights(extra_v_tokens)
+    return extra_k_tokens, extra_v_tokens
+
 class Attention(nn.Module):
-    def __init__(self, dim, num_patches, num_extra_kv_tokens=10, heads=8, dim_head=64, dropout=0., is_LSA=False):
+    def __init__(self, dim, num_patches, extra_k_tokens, extra_v_tokens, heads=8, dim_head=64, dropout=0., is_LSA=False):
         super().__init__()
         inner_dim = dim_head * heads
         project_out = not (heads == 1 and dim_head == dim)
@@ -61,11 +68,10 @@ class Attention(nn.Module):
         self.dim_head = dim_head
         self.attend = nn.Softmax(dim=-1)
         self.to_qkv = nn.Linear(self.dim, self.inner_dim * 3, bias=False)
-        self.extra_k_tokens = nn.Parameter(torch.randn(num_extra_kv_tokens, self.dim_head))
-        self.extra_v_tokens = nn.Parameter(torch.randn(num_extra_kv_tokens, self.dim_head))
         init_weights(self.to_qkv)
-        init_weights(self.extra_k_tokens)
-        init_weights(self.extra_v_tokens)
+        self.extra_k_tokens = extra_k_tokens
+        self.extra_v_tokens = extra_v_tokens
+
         self.to_out = nn.Sequential(
             nn.Linear(self.inner_dim, self.dim),
             nn.Dropout(dropout)
@@ -104,7 +110,6 @@ class Attention(nn.Module):
         out = rearrange(out, 'b h n d -> b n (h d)')
         return self.to_out(out)
 
-    
     def flops(self):
         flops = 0
         if not self.is_coord:
@@ -120,9 +125,12 @@ class Transformer(nn.Module):
         self.layers = nn.ModuleList([])
         self.scale = {}
 
+        num_extra_kv_tokens = 10
+        extra_k_tokens, extra_v_tokens = init_extra_tokens(num_extra_kv_tokens, dim_head)
+
         for i in range(depth):
             self.layers.append(nn.ModuleList([
-                PreNorm(num_patches, dim, Attention(dim, num_patches, heads = heads, dim_head = dim_head, dropout = dropout, is_LSA=is_LSA)),
+                PreNorm(num_patches, dim, Attention(dim, num_patches, extra_k_tokens, extra_v_tokens, heads = heads, dim_head = dim_head, dropout = dropout, is_LSA=is_LSA)),
                 PreNorm(num_patches, dim, FeedForward(dim, num_patches, dim * mlp_dim_ratio, dropout = dropout))
             ]))            
         self.drop_path = DropPath(stochastic_depth) if stochastic_depth > 0 else nn.Identity()
